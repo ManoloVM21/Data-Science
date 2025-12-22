@@ -1,0 +1,74 @@
+---
+title: "Data Cleaning Challenge"
+author: "Manolo Vasquez Mendoza"
+format:
+  html:
+    self-contained: true
+    page-layout: full
+    title-block-banner: true
+    toc: true
+    toc-depth: 3
+    toc-location: body
+    number-sections: false
+    html-math-method: katex
+    code-fold: true
+    code-summary: "Show the code"
+    code-overflow: wrap
+    code-copy: hover
+    code-tools:
+        source: false
+        toggle: true
+        caption: See code
+execute: 
+  warning: false
+    
+---
+### Importing data
+```{python}
+
+import kagglehub
+import pandas as pd
+import numpy as np
+
+df = kagglehub.dataset_download("ahmedmohamed2003/cafe-sales-dirty-data-for-cleaning-training")
+
+import os
+csv_file = [f for f in os.listdir(df) if f.endswith('.csv')][0]
+df = pd.read_csv(os.path.join(df, csv_file))
+df_clean = df.copy()
+df_clean
+```
+### Set N/As and accurate data types
+```{python}
+
+df_clean = df_clean.replace(["ERROR","UNKNOWN"], np.nan)
+columns = {
+  "Item":str,
+  "Quantity":float,
+  "Price Per Unit":float,
+  "Total Spent":float,
+  "Payment Method":str,
+  "Location":str,
+  "Transaction Date":"datetime64[ns]"
+  }
+df_clean = df_clean.astype(columns)
+df_clean = df_clean.replace(["nan"], np.nan)
+df_clean
+```
+### Fill N/As
+```{python}
+
+fill_values = {
+    "Item": "Various",
+    "Quantity": df_clean["Quantity"].mean().round(0),
+    "Price Per Unit": df_clean["Price Per Unit"].mean().round(0),
+    "Payment Method": df_clean["Payment Method"].ffill(),
+    "Total Spent": df_clean["Total Spent"].mean().round(0),
+    "Location": "other",
+    "Transaction Date": df_clean.sort_values("Transaction Date", ascending=True)["Transaction Date"].ffill()
+}
+df_clean = df_clean.fillna(fill_values)
+
+df_clean
+```
+
