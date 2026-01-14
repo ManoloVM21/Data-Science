@@ -1,0 +1,11 @@
+I will need:
+* Data of CV/resume with target included (supervised learning)
+* Data of CV/resume with target not included (unsupervised learning)
+* CV/resume parsing tools
+* Data Cleaning and parsing
+* Hot encoding techniques
+* Machine learning frameworks (e.g., TensorFlow, PyTorch, Scikit-learn) (Model that works well with text and categorical data)
+* App development (upload cvs and get results - admitted or not admitted) (AI web app)
+-> Connect ML model with app
+-> Connect app with a database and show a table with all cvs uploaded and their results - ordered by accepted/not accepted
+* Database management (e.g., SQL, NoSQL)

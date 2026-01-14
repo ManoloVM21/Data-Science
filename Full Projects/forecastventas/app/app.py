@@ -82,14 +82,8 @@ def recalcular_precios(df_prod, descuento_adj, escenario_comp):
     else:
         ajuste = 1.0
     
-    for col in ['Amazon', 'Decathlon', 'Deporvillage']:
-        if col in df_sim.columns:
-            df_sim[col] = df_sim[col] * ajuste
-    
-    # Recalcular precio_competencia (promedio de las 3 columnas)
-    comp_cols = [c for c in ['Amazon', 'Decathlon', 'Deporvillage'] if c in df_sim.columns]
-    if comp_cols:
-        df_sim['precio_competencia'] = df_sim[comp_cols].mean(axis=1)
+    # Aplicar ajuste directamente a precio_competencia
+    df_sim['precio_competencia'] = df_sim['precio_competencia'] * ajuste
     
     # Recalcular ratio_precio
     df_sim['ratio_precio'] = df_sim['precio_venta'] / df_sim['precio_competencia']
@@ -209,7 +203,7 @@ descuento_ajuste = st.sidebar.slider(
 # Selector de escenario de competencia
 st.sidebar.markdown("### 🏪 Escenario de Competencia:")
 escenario_competencia = st.sidebar.radio(
-    "",
+    "Escenario de Competencia",
     ["Actual (0%)", "Competencia -5%", "Competencia +5%"],
     index=0,
     help="Simula cambios en los precios de la competencia"
