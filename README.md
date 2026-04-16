@@ -1,20 +1,40 @@
 # Data Science Portfolio (Python • ML • SQL)
 
-This repository contains hands-on data science projects built with a focus on **Python**, **machine learning**, and **SQL-style data work** (querying, aggregation, joins/merges, and feature engineering). Recruiters can use this README as a guide to quickly understand the skills demonstrated in each project.
+This repository contains hands-on data science projects built with a focus on **Python**, **machine learning**, and **SQL-style data work** (querying, aggregation, joins/merges, and feature engineering).
 
 ## Quick navigation
 
-- **Data Cleaning Challenge** → `CHALLENGES/Data Cleaning/`
-- **Data Manipulation & Visualization (Traffic Analysis)** → `CHALLENGES/Data Manipulation and Visualization/`
 - **Full Projects** (multi-file projects) → `Full Projects/`
   1. [Donors](Full%20Projects/Donnors)
   2. [Bike Rentals](Full%20Projects/Bike%20Rentals%20per%20Hours%20-%20Neural%20Networks%20%26%20XGBoost)
   3. [House Pricing](Full%20Projects/House%20Price%20Predictions%20-%20XGBoost)
   4. [Bank Loan](Full%20Projects/Bank%20Loan%20Program%20-%20%20Random%20Forest)
+- **Data Cleaning Challenge** → `CHALLENGES/Data Cleaning/`
+- **Data Manipulation & Visualization (Traffic Analysis)** → `CHALLENGES/Data Manipulation and Visualization/`
 
 ---
 
-## 1) Data Cleaning Challenge (Python / Pandas)
+## 1) Full Projects 
+
+**Location:** `Full Projects/`
+
+Here is a collection of comprehensive machine learning and data science projects showcasing end-to-end workflows from data processing to model training and evaluation:
+
+1) **Donors** — [Full Projects/Donnors](Full%20Projects/Donnors)  
+   *Predicting and analyzing donor behavior using classification models to optimize fundraising campaigns.*
+
+2) **Bike Rentals** — [Full Projects/Bike Rentals per Hours - Neural Networks & XGBoost](Full%20Projects/Bike%20Rentals%20per%20Hours%20-%20Neural%20Networks%20%26%20XGBoost)  
+   *Time-series and regression analysis forecasting hourly bike rental demand utilizing deep learning (Neural Networks) and gradient boosting (XGBoost).*  
+
+3) **House Pricing** — [Full Projects/House Price Predictions - XGBoost](Full%20Projects/House%20Price%20Predictions%20-%20XGBoost)  
+   *Advanced regression techniques predicting property values based on numerous features using XGBoost and rigorous data preprocessing.*
+
+4) **Bank Loan** — [Full Projects/Bank Loan Program -  Random Forest](Full%20Projects/Bank%20Loan%20Program%20-%20%20Random%20Forest)
+   *Risk assessment model classifying bank loan approvals and defaults utilizing Random Forest classifiers and feature importance analysis.*
+
+---
+
+## 2) Data Cleaning Challenge (Python / Pandas)
 
 **Location:** `CHALLENGES/Data Cleaning/`
 
@@ -43,7 +63,7 @@ This repository contains hands-on data science projects built with a focus on **
 
 ---
 
-## 2) Data Manipulation & Visualization — Traffic Analysis (Python / SQL-style analysis)
+## 3) Data Manipulation & Visualization — Traffic Analysis (Python / SQL-style analysis)
 
 **Location:** `CHALLENGES/Data Manipulation and Visualization/`
 
@@ -80,16 +100,6 @@ This repository contains hands-on data science projects built with a focus on **
 
 ---
 
-## 3) Full Projects
-
-**Location:** `Full Projects/`
-
-1) **Donors** — [Full Projects/Donnors](Full%20Projects/Donnors)  
-2) **Bike Rentals** — [Full Projects/Bike Rentals per Hours - Neural Networks & XGBoost](Full%20Projects/Bike%20Rentals%20per%20Hours%20-%20Neural%20Networks%20%26%20XGBoost)  
-3) **House Pricing** — [Full Projects/House Price Predictions - XGBoost](Full%20Projects/House%20Price%20Predictions%20-%20XGBoost)  
-4) **Bank Loan** — [Full Projects/Bank Loan Program -  Random Forest](Full%20Projects/Bank%20Loan%20Program%20-%20%20Random%20Forest)
----
-
 ## Tech stack
 
 - **Python:** Pandas, NumPy, Matplotlib, Lets-Plot
@@ -108,3 +118,4 @@ Open the pre-rendered `.html` files inside each project folder.
 1. Install Python dependencies (example):
    ```bash
    pip install pandas numpy matplotlib lets-plot kagglehub
+   ```
