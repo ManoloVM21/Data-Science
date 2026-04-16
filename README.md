@@ -7,6 +7,10 @@ This repository contains hands-on data science projects built with a focus on **
 - **Data Cleaning Challenge** → `CHALLENGES/Data Cleaning/`
 - **Data Manipulation & Visualization (Traffic Analysis)** → `CHALLENGES/Data Manipulation and Visualization/`
 - **Full Projects** (multi-file projects) → `Full Projects/`
+  1. [Donors](Full%20Projects/Donnors)
+  2. [Bike Rentals](Full%20Projects/Bike%20Rentals%20per%20Hours%20-%20Neural%20Networks%20%26%20XGBoost)
+  3. [House Pricing](Full%20Projects/House%20Price%20Predictions%20-%20XGBoost)
+  4. [Bank Loan](Full%20Projects/Bank%20Loan%20Program%20-%20%20Random%20Forest)
 
 ---
 
@@ -80,10 +84,10 @@ This repository contains hands-on data science projects built with a focus on **
 
 **Location:** `Full Projects/`
 
-This folder contains larger multi-file projects (code + data + outputs). If you’re a recruiter, this is a good place to look for end-to-end workflows.
-
-> Note: Some projects may reference large datasets that are not committed to GitHub. When this happens, the project typically shows how to download or reproduce the data pipeline.
-
+1) **Donors** — [Full Projects/Donnors](Full%20Projects/Donnors)  
+2) **Bike Rentals** — [Full Projects/Bike Rentals per Hours - Neural Networks & XGBoost](Full%20Projects/Bike%20Rentals%20per%20Hours%20-%20Neural%20Networks%20%26%20XGBoost)  
+3) **House Pricing** — [Full Projects/House Price Predictions - XGBoost](Full%20Projects/House%20Price%20Predictions%20-%20XGBoost)  
+4) **Bank Loan** — [Full Projects/Bank Loan Program -  Random Forest](Full%20Projects/Bank%20Loan%20Program%20-%20%20Random%20Forest)
 ---
 
 ## Tech stack
