@@ -1,3 +1,12 @@
+## Collaboration Context
+This project was developed as part of the Data Science Society at Florida State University.
+
+## My Contribution
+- Data cleaning and preprocessing
+- Feature engineering
+- Model development (Random Forest)
+- Model evaluation and interpretation
+
 # FSU Donor Pledge Amount Prediction
 
 Regression model that forecasts each FSU donor's annual pledge amount for the next fundraising year, and segments the full donor base into four actionable outreach quadrants.
