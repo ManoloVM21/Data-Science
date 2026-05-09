@@ -91,7 +91,8 @@ CREATE TABLE wealth (
     IWave_AnnualCapacityTargetProduction DECIMAL(16,2)
 );
 
-LOAD DATA LOCAL INFILE 'C:\Users\alexa\OneDrive\Desktop\FSU_Boosters\personal_folders\Manolo\base.csv'
+# BASE
+LOAD DATA LOCAL INFILE '../base.csv'
 INTO TABLE base
 FIELDS TERMINATED BY ','
 ENCLOSED BY '"'
@@ -130,3 +131,102 @@ CurrentYearMembershipPledged = NULLIF(@CurrentYearMembershipPledged, ''),
 CurrentYearMembershipPaid = NULLIF(@CurrentYearMembershipPaid, ''),
 CurrentYearOtherPledged = NULLIF(@CurrentYearOtherPledged, ''),
 CurrentYearOtherPaid = NULLIF(@CurrentYearOtherPaid, '');
+
+# TEN YEAR DONATION
+LOAD DATA LOCAL INFILE '../ten_year_donation.csv'
+INTO TABLE ten_year_donation
+FIELDS TERMINATED BY ','
+ENCLOSED BY '"'
+LINES TERMINATED BY '\n'
+IGNORE 1 ROWS
+(@FanID, @FundGroupName, @FundName, @FundCode, @MostRecentPaymentPledgeDate,
+ @DatePledged, @DriveYear, @PledgeAmount, @PaymentAmount)
+SET
+FanID = NULLIF(@FanID, ''),
+FundGroupName = NULLIF(@FundGroupName, ''),
+FundName = NULLIF(@FundName, ''),
+FundCode = NULLIF(@FundCode, ''),
+MostRecentPaymentPledgeDate = CASE
+    WHEN NULLIF(@MostRecentPaymentPledgeDate, '') IS NULL THEN NULL
+    ELSE STR_TO_DATE(@MostRecentPaymentPledgeDate, '%Y-%m-%d %H:%i:%s')
+END,
+DatePledged = CASE
+    WHEN NULLIF(@DatePledged, '') IS NULL THEN NULL
+    ELSE STR_TO_DATE(@DatePledged, '%Y-%m-%d %H:%i:%s')
+END,
+DriveYear = NULLIF(@DriveYear, ''),
+PledgeAmount = NULLIF(@PledgeAmount, ''),
+PaymentAmount = NULLIF(@PaymentAmount, '');
+
+# DEMOGRAPHIC
+LOAD DATA LOCAL INFILE '../demographic.csv'
+INTO TABLE demographic
+FIELDS TERMINATED BY ','
+ENCLOSED BY '"'
+LINES TERMINATED BY '\n'
+IGNORE 1 ROWS
+(@FanID, @Age)
+SET
+FanID = NULLIF(@FanID, ''),
+Age = NULLIF(@Age, '');
+
+# EDUCATION
+LOAD DATA LOCAL INFILE '../education.csv'
+INTO TABLE education
+FIELDS TERMINATED BY ','
+ENCLOSED BY '"'
+LINES TERMINATED BY '\n'
+IGNORE 1 ROWS
+(@FanID, @Institution, @EducationStatus, @EducationDate, @Degree,
+ @DegreeType, @College, @Division, @Department)
+SET
+FanID = NULLIF(@FanID, ''),
+Institution = NULLIF(@Institution, ''),
+EducationStatus = NULLIF(@EducationStatus, ''),
+EducationDate = CASE
+    WHEN NULLIF(@EducationDate, '') IS NULL THEN NULL
+    ELSE STR_TO_DATE(@EducationDate, '%Y-%m-%d %H:%i:%s')
+END,
+Degree = NULLIF(@Degree, ''),
+DegreeType = NULLIF(@DegreeType, ''),
+College = NULLIF(@College, ''),
+Division = NULLIF(@Division, ''),
+Department = NULLIF(@Department, '');
+
+# BOARD_MEMBERS
+LOAD DATA LOCAL INFILE '../board_members.csv'
+INTO TABLE board_members
+FIELDS TERMINATED BY ','
+ENCLOSED BY '"'
+LINES TERMINATED BY '\n'
+IGNORE 1 ROWS
+(@FanID, @Board, @RoleName, @StartDate, @EndDate, @CurrentFlag)
+SET
+FanID = NULLIF(@FanID, ''),
+Board = NULLIF(@Board, ''),
+RoleName = NULLIF(@RoleName, ''),
+StartDate = CASE
+    WHEN NULLIF(@StartDate, '') IS NULL THEN NULL
+    ELSE STR_TO_DATE(@StartDate, '%Y-%m-%d')
+END,
+EndDate = CASE
+    WHEN NULLIF(@EndDate, '') IS NULL THEN NULL
+    ELSE STR_TO_DATE(@EndDate, '%Y-%m-%d')
+END,
+CurrentFlag = NULLIF(@CurrentFlag, '');
+
+# WEALTH
+
+LOAD DATA LOCAL INFILE '../wealth.csv'
+INTO TABLE wealth
+FIELDS TERMINATED BY ','
+ENCLOSED BY '"'
+LINES TERMINATED BY '\n'
+IGNORE 1 ROWS
+(@FanID, @IWave_Properties, @IWave_PropertiesValue, @IWave_AnnualCapacity, @IWave_AnnualCapacityTargetProduction)
+SET
+FanID = NULLIF(@FanID, ''),
+IWave_Properties = NULLIF(@IWave_Properties, ''),
+IWave_PropertiesValue = NULLIF(@IWave_PropertiesValue, ''),
+IWave_AnnualCapacity = NULLIF(@IWave_AnnualCapacity, ''),
+IWave_AnnualCapacityTargetProduction = NULLIF(@IWave_AnnualCapacityTargetProduction, '');
