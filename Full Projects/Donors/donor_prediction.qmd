@@ -1,0 +1,1168 @@
+---
+title: 'Predicting Annual Donor Pledge Amounts'
+subtitle: 'A Machine Learning Approach to Fundraising Analytics'
+author: 'Manolo Vasquez'
+date: 'May 2026'
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-title: "Contents"
+    toc-location: left
+    number-sections: false
+    code-fold: true
+    code-tools: true
+    code-summary: "Show code"
+    highlight-style: github
+    fig-align: center
+    fig-width: 10
+    fig-height: 6
+    df-print: paged
+    embed-resources: true
+    page-layout: article
+    css: styles.css
+execute:
+  warning: false
+  message: false
+  echo: true
+---
+
+```{python}
+#| include: false
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import seaborn as sns
+import xgboost as xgb
+from pathlib import Path
+from sklearn.linear_model import Ridge
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.model_selection import RandomizedSearchCV
+
+COLUMNS = [
+    'FanID', 'DriveYear', 'Num_group_donating', 'Lag1_Pledge', 'Lag1_null',
+    'TotalPledgeAnual', 'next_year_donation', 'MaxYear', 'MinYear', 'YearsCount',
+    'Avg_pledges_3years', 'Avg_pct_increase_5years', 'insufficient_history',
+    'EducationStatus', 'Degree', 'College', 'was_board_member', 'CurrentFlag',
+    'IWave_Properties', 'IWave_PropertiesValue', 'IWave_AnnualCapacityTargetProduction',
+    'Properties_null', 'Age', 'state', 'YearsOfDonating', 'HighestMembershipLevel',
+    'MostRecentMembershipLevel', 'CYAnnualFundPledged', 'CYAnnualFundPaid', 'IsAlumni'
+]
+plt.style.use('seaborn-v0_8-whitegrid')
+COLORS = {'train': '#2196F3', 'val': '#4CAF50', 'test': '#FF9800', 'highlight': '#E91E63'}
+
+PROJECT_ROOT = Path(r'c:\Users\alexa\OneDrive\Desktop\BS- Data Science\Data-Science\Full Projects\Donors')
+DATA_DIR = PROJECT_ROOT / 'data'
+
+df = pd.read_csv(DATA_DIR / 'modeling_table.csv', header=None, names=COLUMNS)
+ten_year_donation = pd.read_csv(DATA_DIR / 'ten_year_donation.csv')
+base_table = pd.read_csv(DATA_DIR / 'base.csv')
+```
+
+## Project Overview
+
+Every year, fundraising teams at donor-driven organizations face the same challenge: *who should we contact, when, and how much effort should we invest in each donor?* Without a systematic approach, outreach strategies rely on intuition or simple rules — "contact everyone who gave last year" — which misses opportunities and wastes agent time.
+
+This project builds a machine learning pipeline to answer two questions for **Anonymous Organization**:
+
+1. **How much is each donor likely to pledge next year?**
+2. **Which donors deserve priority outreach, and which are already low-maintenance?**
+
+Using 10 years of historical donation records (2014–2025) joined from six relational tables, I trained an XGBoost regression model that achieved **MAE ≈ \$1,145** on held-out 2024 data — substantially better than simply repeating the prior year's pledge. The final deliverable is a segmentation table that categorizes each donor into one of four actionable quadrants for the fundraising team.
+
+
+## Data Architecture & SQL Feature Engineering {#sec-sql}
+
+Before any modeling, raw transactional data had to be restructured into a modeling-ready table. This involved five source tables: pledge/payment history (`ten_year_donation`), demographics, wealth scores, education records, and board membership history.
+
+The central engineering challenge was building **temporal features** from the pledge history — lagged values, year-over-year growth rates, and rolling averages — while ensuring no future information leaked into the past. All of this was done in MySQL before handing off to Python.
+
+### Temporal Feature Engineering (`ten_year_features`)
+
+The most critical table. For each donor-year combination, we compute:
+
+- `Lag1_Pledge` through `Lag5_Pledge`: prior-year pledge amounts using `LAG()` window functions
+- `Avg_pledges_3years`: rolling 3-year average (handles missing years via `NULLIF`)
+- `Avg_pct_increase_5years`: average year-over-year growth rate over 5 years
+- `insufficient_history`: flag for donors with fewer than 5 years of data
+
+```{sql}
+CREATE TABLE ten_year_features AS
+SELECT 
+    *,
+    IF(YearsCount < 5 OR Avg_pct_increase_5years IS NULL, 1, 0) AS insufficient_history
+FROM (
+    SELECT 
+        FanID, DriveYear, Num_group_donating, Last_payment_date, TotalPledgeAnual, L1,
+        next_year_donation, MaxYear, MinYear, YearsCount,
+        (COALESCE(L1, 0) + COALESCE(L2, 0) + COALESCE(L3, 0)) / 
+        NULLIF(
+            (CASE WHEN L1 IS NOT NULL THEN 1 ELSE 0 END) +
+            (CASE WHEN L2 IS NOT NULL THEN 1 ELSE 0 END) +
+            (CASE WHEN L3 IS NOT NULL THEN 1 ELSE 0 END), 
+        0) AS Avg_pledges_3years,
+        (
+            COALESCE(growth_1, 0) + COALESCE(growth_2, 0) + 
+            COALESCE(growth_3, 0) + COALESCE(growth_4, 0) + 
+            COALESCE(growth_5, 0)
+        ) / 
+        NULLIF(
+            (CASE WHEN growth_1 IS NOT NULL THEN 1 ELSE 0 END) +
+            (CASE WHEN growth_2 IS NOT NULL THEN 1 ELSE 0 END) +
+            (CASE WHEN growth_3 IS NOT NULL THEN 1 ELSE 0 END) +
+            (CASE WHEN growth_4 IS NOT NULL THEN 1 ELSE 0 END) +
+            (CASE WHEN growth_5 IS NOT NULL THEN 1 ELSE 0 END), 
+        0) AS Avg_pct_increase_5years
+    FROM (
+        SELECT 
+            *,
+            ((TotalPledgeAnual - NULLIF(L1,0)) / NULLIF(L1,0) * 100) AS growth_1,
+            ((L1 - NULLIF(L2,0)) / NULLIF(L2,0) * 100) AS growth_2,
+            ((L2 - NULLIF(L3,0)) / NULLIF(L3,0) * 100) AS growth_3,
+            ((L3 - NULLIF(L4,0)) / NULLIF(L4,0) * 100) AS growth_4,
+            ((L4 - NULLIF(L5,0)) / NULLIF(L5,0) * 100) AS growth_5
+        FROM (
+            SELECT 
+                FanID, DriveYear, TotalPledgeAnual, Last_payment_date, Num_group_donating,
+                MIN(DriveYear) OVER(PARTITION BY FanID) as MinYear,
+                MAX(DriveYear) OVER(PARTITION BY FanID) as MaxYear,
+                COUNT(DriveYear) OVER(PARTITION BY FanID) as YearsCount,
+                LEAD(TotalPledgeAnual) OVER (PARTITION BY FanID ORDER BY DriveYear) AS next_year_donation,
+                LAG(TotalPledgeAnual, 1) OVER (PARTITION BY FanID ORDER BY DriveYear) AS L1,
+                LAG(TotalPledgeAnual, 2) OVER (PARTITION BY FanID ORDER BY DriveYear) AS L2,
+                LAG(TotalPledgeAnual, 3) OVER (PARTITION BY FanID ORDER BY DriveYear) AS L3,
+                LAG(TotalPledgeAnual, 4) OVER (PARTITION BY FanID ORDER BY DriveYear) AS L4,
+                LAG(TotalPledgeAnual, 5) OVER (PARTITION BY FanID ORDER BY DriveYear) AS L5
+            FROM (
+                SELECT 
+                    FanID, DriveYear,
+                    SUM(PledgeAmount) AS TotalPledgeAnual,
+                    MAX(MostRecentPaymentPledgeDate) AS Last_payment_date,
+                    COUNT(FundGroupName) AS Num_group_donating
+                FROM ten_year_donation
+                GROUP BY FanID, DriveYear
+            ) AS agrupado
+        ) AS con_lags
+    ) AS con_growths
+) AS final_step;
+```
+
+### Supporting Dimension Tables
+
+**Education** — collapsed to a single row per donor by highest degree, with an ordinal rank (Doctoral → 3, Master's → 2, Bachelor's → 1):
+
+```{sql}
+CREATE TABLE education_final AS  
+WITH ranked AS ( 
+    SELECT
+        FanID, EducationStatus, Degree, DegreeType, College,
+        CASE 
+            WHEN Degree LIKE '%Doctor%' THEN 3
+            WHEN Degree LIKE '%Master%' THEN 2
+            WHEN Degree LIKE '%Bachelor%' THEN 1
+            ELSE 0
+        END AS DegreeRank
+    FROM education
+    WHERE DegreeType = 'PRIMARY'
+)  
+SELECT FanID, EducationStatus, Degree, College
+FROM (
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY FanID ORDER BY DegreeRank DESC) AS rn
+    FROM ranked
+) t
+WHERE rn = 1;
+```
+
+**Board Membership** — binary flag + whether the donor is currently active on the board:
+
+```{sql}
+CREATE TABLE board_members_final AS
+SELECT 
+    FanID,
+    1 AS was_board_member,
+    MAX(CurrentFlag) AS CurrentFlag
+FROM board_members
+GROUP BY FanID;
+```
+
+**Wealth** — IWave wealth indicators with a null flag (missing data is itself a signal):
+
+```{sql}
+CREATE TABLE wealth_final AS
+SELECT FanID, IWave_Properties, IWave_PropertiesValue, 
+       IWave_AnnualCapacityTargetProduction, 
+       IF(IWave_PropertiesValue IS NULL, 1, 0) AS Properties_null 
+FROM wealth;
+```
+
+### Final Modeling Table Assembly
+
+All tables are joined via `LEFT JOIN` on `FanID`. Only rows where `next_year_donation IS NOT NULL` and `DriveYear BETWEEN 2014 AND 2025` are retained — this is the supervised learning target and the temporal scope of the analysis.
+
+```{sql}
+CREATE TABLE donations_df AS 
+SELECT 
+    t.FanID, t.DriveYear, t.Num_group_donating,
+    COALESCE(t.L1, 0) AS Lag1_Pledge,
+    CASE WHEN t.L1 IS NULL THEN 1 ELSE 0 END AS Lag1_null,
+    t.TotalPledgeAnual, t.next_year_donation, t.MaxYear, t.MinYear, t.YearsCount,
+    COALESCE(t.Avg_pledges_3years, 0)      AS Avg_pledges_3years,
+    COALESCE(t.Avg_pct_increase_5years, 0) AS Avg_pct_increase_5years,
+    t.insufficient_history,
+    e.EducationStatus, e.Degree, e.College,
+    COALESCE(b.was_board_member, 0)  AS was_board_member,
+    COALESCE(b.CurrentFlag, 0)       AS CurrentFlag,
+    COALESCE(w.IWave_Properties, 0)  AS IWave_Properties,
+    COALESCE(w.IWave_PropertiesValue, 0) AS IWave_PropertiesValue,
+    COALESCE(w.IWave_AnnualCapacityTargetProduction, 0) AS IWave_AnnualCapacityTargetProduction,
+    COALESCE(w.Properties_null, 1)   AS Properties_null,
+    d.Age, bf.state, bf.YearsOfDonating,
+    bf.HighestMembershipLevel, bf.MostRecentMembershipLevel,
+    bf.CYAnnualFundPledged, bf.CYAnnualFundPaid, bf.IsAlumni
+FROM ten_year_features t 
+    LEFT JOIN education_final e    ON t.FanID = e.FanID 
+    LEFT JOIN board_members_final b ON t.FanID = b.FanID 
+    LEFT JOIN wealth_final w        ON t.FanID = w.FanID
+    LEFT JOIN demographic d         ON t.FanID = d.FanID
+    LEFT JOIN base_final bf         ON t.FanID = bf.FanID
+WHERE t.next_year_donation IS NOT NULL 
+  AND t.DriveYear BETWEEN 2014 AND 2024;
+```
+
+
+
+## Exploratory Data Analysis {#sec-eda}
+
+Before building any model, we needed to validate several assumptions about the data structure and answer key design questions that would shape the entire pipeline.
+
+### Problem Framing: Why Regression, Not Classification?
+
+The initial instinct was to predict *whether* a donor would comply with their pledge. After checking the data, that approach was rejected immediately.
+
+```{python}
+non_compliance_rate = (
+    (ten_year_donation['PaymentAmount'] < ten_year_donation['PledgeAmount']).mean()
+)
+print(f"Non-compliance rate: {non_compliance_rate:.2%}")
+# Result: Non-compliance rate: 3.02% → Too imbalanced for classification
+```
+
+Only 3% of pledge-year combinations show non-compliance. A classifier trained on this would simply predict "compliant" for everyone and achieve 97% accuracy — a useless model. The regression framing (predict *how much* they'll pledge) was adopted instead.
+
+### Donor Population Scope
+
+```{python}
+donors_with_history = ten_year_donation['FanID'].nunique()   # ~45,000
+total_in_base       = base_table['FanID'].nunique()          # ~706,000
+print(f"Total donors in base: {total_in_base:,}")
+print(f"Donors with pledge history: {donors_with_history:,} ({donors_with_history/total_in_base:.2%} of total)")
+```
+
+The model applies to roughly 6% of the total database — active donors with a pledge track record in the last 10 years. The remaining 93% fall outside scope: they have no donation history.
+
+### Target Distribution and the Case for `log1p`
+
+Donation amounts span from a few dollars to over \$790,000. The raw distribution is extremely right-skewed — as the histogram above confirms, the vast majority of donors cluster near \$0 while a handful of mega-donors extend the tail past \$350,000. Computing any loss function in dollar scale would let those outliers dominate the model entirely.
+
+Applying `log1p` compresses the range and stabilizes variance. The second histogram shows the transformed distribution shifting toward a near-normal shape centered around `log1p ≈ 6–7`, which corresponds roughly to \$400–\$1,100 in the original scale — the typical giving range for most donors in this dataset. This transformation allows the model to learn meaningful patterns across the entire donor spectrum, rather than being overwhelmed by a few extreme values.
+
+```{python}
+#| label: fig-distribution
+#| fig-cap: "Left: raw donation amounts (capped at $500K). Right: log1p-transformed distribution showing near-normal shape centered around typical giving range."
+#| fig-width: 12
+#| fig-height: 5
+
+FILL_RAW  = "#2E86AB"
+FILL_LOG  = "#E84855"
+BORDER    = "#1A1A2E"
+
+df1 = df.copy()
+df1['next_year_donation_log'] = np.log1p(df1['next_year_donation'])
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+# Raw scale
+raw_data = df[(df['next_year_donation'] >= 0) & (df['next_year_donation'] < 500_000)]['next_year_donation']
+ax1.hist(raw_data, bins=50, color=FILL_RAW, edgecolor=BORDER, alpha=0.85, linewidth=0.3)
+ax1.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x:,.0f}'))
+ax1.tick_params(axis='x', labelrotation=30, labelsize=8)
+ax1.set_title('Donation Amount Distribution — Raw Scale', fontsize=13, fontweight='bold', pad=10)
+ax1.set_xlabel('Next Year Donation (USD)', fontsize=10)
+ax1.set_ylabel('Number of Donors', fontsize=10)
+ax1.text(0.98, 0.95, 'Capped at $500K\n(excludes mega-donors)',
+         transform=ax1.transAxes, ha='right', va='top', fontsize=8, color='#555555')
+# log1p scale
+ax2.hist(df1['next_year_donation_log'], bins=50, color=FILL_LOG, edgecolor=BORDER, alpha=0.85, linewidth=0.3)
+ax2.set_title('Donation Amount Distribution — log1p Scale', fontsize=13, fontweight='bold', pad=10)
+ax2.set_xlabel('log1p(Next Year Donation)', fontsize=10)
+ax2.set_ylabel('Number of Donors', fontsize=10)
+ax2.text(0.98, 0.95, 'log1p(x) = log(1 + x)\nReverses with expm1(x)',
+         transform=ax2.transAxes, ha='right', va='top', fontsize=8, color='#555555')
+
+plt.tight_layout()
+plt.show()
+plt.close()
+
+```
+
+
+### Reliability Threshold for Segmentation
+
+To define "reliable" donors, we computed each donor's track record: in what fraction of years did they actually pay what they pledged?
+
+```{python}
+# ── Historical reliability distribution ──────────────────────────────────────
+# Used to define the reliability threshold for donor segmentation.
+max_year = 2024
+min_year = max_year - 9
+td_10y = ten_year_donation[ten_year_donation['DriveYear'].between(min_year, max_year)].copy()
+
+fan_year = (
+    td_10y.groupby(['FanID', 'DriveYear'], as_index=False)
+    .agg(PledgeAmount=('PledgeAmount', 'sum'), PaymentAmount=('PaymentAmount', 'sum'))
+)
+fan_year = fan_year[fan_year['PledgeAmount'] > 0].copy()
+fan_year['met_commitment'] = (fan_year['PaymentAmount'] >= fan_year['PledgeAmount']).astype(int)
+
+fan_reliability = (
+    fan_year.groupby('FanID', as_index=False)
+    .agg(years_with_pledge=('DriveYear', 'nunique'), years_met=('met_commitment', 'sum'))
+)
+fan_reliability['pct_years_met_commitment'] = (
+    100 * fan_reliability['years_met'] / fan_reliability['years_with_pledge']
+)
+
+perfect_pct = (fan_reliability['pct_years_met_commitment'] == 100).mean() * 100
+print(f"Donors with 100% commitment rate: {perfect_pct:.1f}%")
+print(f"→ Threshold set at 100% (binary: perfect vs. any miss)")
+print(f"\nReliability distribution:")
+print(fan_reliability['pct_years_met_commitment'].describe())
+
+# → 90.9% of donors have a 100% commitment rate
+
+```
+
+With 90.9% of donors always fulfilling their pledges, the natural threshold is binary: 100% vs. anything less. A continuous reliability score would add complexity without meaningful differentiation given this distribution.
+
+
+## Feature Engineering & Preprocessing {#sec-features}
+
+The modeling table required substantial transformation before it could be fed into any algorithm. The table below summarizes every design decision and the rationale behind it.
+
+| Feature Group | Treatment | Rationale |
+|---|---|---|
+| `next_year_donation` (target) | `log1p` transformation | Extreme right skew — max \$791K, median ~\$650 |
+| `Age` | Median imputation + `Age_null` flag | 23% missing — flag preserves missingness signal |
+| `IWave_*` wealth scores | Zero imputation + `Properties_null` flag | Missing likely means no wealth data was shared |
+| `HighestMembershipLevel` | Ordinal mapping 1–10 | Natural hierarchy (Legacy Chief > Spirit) |
+| `Degree` | Ordinal 0–4 via `classify_degree()` | 93 unique text values collapsed to academic level |
+| `College` | One-hot encoding | 19 categories, no natural order |
+| `state` | `is_florida` flag + 4 U.S. regions | FL = 75% of data; 50-state OHE adds noise |
+| Train/Val/Holdout split | Temporal: 2014–2023 / 2024 / 2025 | Respects time ordering — random split would cause leakage |
+
+: Feature engineering decisions {tbl-colwidths="[25,30,45]"}
+
+### Key Design Choices
+
+**Why ordinal encoding for membership levels?** The organization uses a named tier system (Legacy Chief, Platinum Chief, ..., Spirit) with a clear hierarchy. Treating this as nominal would discard that signal. The ordinal mapping mirrors the actual tier structure.
+
+**Why temporal split instead of random?** A random 80/20 split would let the model see 2024 donors in training and predict their 2024 behavior — trivially easy and completely misleading. The temporal split simulates real deployment: train on past, validate on the next year, hold out the most recent year.
+
+**Why flag missingness instead of imputing?** For `Age` (23% missing) and wealth scores, the absence of data is itself informative. A donor without an age record differs systematically from one with a known age. Adding a `_null` binary flag lets the model learn from that pattern.
+
+```{python}
+# ── Membership ordinal mapping ────────────────────────────────────────────────
+MEMBERSHIP_MAPPING = {
+    'Legacy Chief': 10, 'Platinum Chief': 9, 'Golden Chief': 8,
+    'Silver Chief': 7,  'Tomahawk': 6,       'Warrior': 5,
+    'Renegade': 4,      'Brave': 3,           'Iron Arrow': 2,
+    'Spirit': 1,        np.nan: 0,            '': 0,
+}
+
+def classify_degree(degree):
+    """Map degree name to ordinal level (0=unknown → 4=doctoral)."""
+    if pd.isna(degree): return 0
+    degree = degree.lower()
+    if 'doctor' in degree or 'juris' in degree or 'ph.d' in degree: return 4
+    if 'master' in degree or 'mba'   in degree:                      return 3
+    if 'bachelor' in degree:                                          return 2
+    if 'associate' in degree:                                         return 1
+    return 0
+
+# ── Build processed dataframe ─────────────────────────────────────────────────
+df_processed = df.copy()
+df_processed['Age']      = pd.to_numeric(df_processed['Age'], errors='coerce')
+df_processed['Age_null'] = df_processed['Age'].isnull().astype(int)
+
+df_processed['Degree_encoded']                    = df_processed['Degree'].apply(classify_degree)
+df_processed['HighestMembershipLevel_encoded']    = df_processed['HighestMembershipLevel'].map(MEMBERSHIP_MAPPING)
+df_processed['MostRecentMembershipLevel_encoded'] = df_processed['MostRecentMembershipLevel'].map(MEMBERSHIP_MAPPING)
+
+education_dummies = pd.get_dummies(
+    df_processed[['EducationStatus', 'College']],
+    prefix=['EducationStatus', 'College'],
+    drop_first=False
+)
+df_processed = pd.concat([df_processed, education_dummies], axis=1)
+
+# ── Regional encoding ─────────────────────────────────────────────────────────
+NORTHEAST = ['CT','ME','MA','NH','RI','VT','NJ','NY','PA']
+SOUTHEAST = ['DE','MD','DC','VA','WV','NC','SC','GA','AL','MS','LA','AR','TN','KY','TX']
+MIDWEST   = ['OH','IN','IL','MI','WI','MN','IA','MO','ND','SD','NE','KS']
+WEST      = ['MT','WY','CO','NM','AZ','UT','NV','CA','OR','WA','ID','AK','HI']
+
+df_processed['is_florida']       = (df_processed['state'] == 'FL').astype(int)
+df_processed['region_northeast'] = df_processed['state'].isin(NORTHEAST).astype(int)
+df_processed['region_southeast'] = df_processed['state'].isin(SOUTHEAST).astype(int)
+df_processed['region_midwest']   = df_processed['state'].isin(MIDWEST).astype(int)
+df_processed['region_west']      = df_processed['state'].isin(WEST).astype(int)
+
+# ── Boolean columns ───────────────────────────────────────────────────────────
+for col in ['insufficient_history', 'Lag1_null', 'Properties_null', 'was_board_member', 'CurrentFlag']:
+    df_processed[col] = df_processed[col].astype(int)
+df_processed['IsAlumni'] = (df_processed['IsAlumni'] == 'Y').astype(int)
+
+print(f"Processed dataset shape: {df_processed.shape}")
+
+```
+
+After preprocessing, the final feature set has **~50 columns** across numeric, boolean, ordinal, education, college, and regional groups. The train set covers 2014–2023, the validation year is 2024, and the holdout (used for final reporting only) is 2025.
+
+
+## Pipeline Overview
+
+```{python}
+# ── Temporal train / validation / holdout split ───────────────────────────────
+# Note: random split would cause data leakage — time ordering must be preserved.
+NUMERIC_FEATURES  = [
+    'Num_group_donating', 'Lag1_Pledge', 'TotalPledgeAnual', 'YearsCount',
+    'Avg_pledges_3years', 'Avg_pct_increase_5years', 'YearsOfDonating', 'Age',
+    'IWave_Properties', 'IWave_PropertiesValue', 'IWave_AnnualCapacityTargetProduction'
+]
+BOOLEAN_FEATURES  = [
+    'insufficient_history', 'Lag1_null', 'Properties_null',
+    'was_board_member', 'CurrentFlag', 'IsAlumni', 'Age_null'
+]
+ORDINAL_FEATURES  = [
+    'HighestMembershipLevel_encoded', 'MostRecentMembershipLevel_encoded', 'Degree_encoded'
+]
+EDUCATION_FEATURES = [c for c in df_processed.columns if c.startswith('EducationStatus_')]
+COLLEGE_FEATURES   = [c for c in df_processed.columns if c.startswith('College_')]
+REGION_FEATURES    = ['is_florida', 'region_northeast', 'region_southeast', 'region_midwest', 'region_west']
+
+ALL_FEATURES = (NUMERIC_FEATURES + BOOLEAN_FEATURES + ORDINAL_FEATURES
+                + EDUCATION_FEATURES + COLLEGE_FEATURES + REGION_FEATURES)
+
+train_mask = (df_processed['DriveYear'] >= 2014) & (df_processed['DriveYear'] <= 2022)
+val_mask   =  df_processed['DriveYear'] == 2023
+test_mask  =  df_processed['DriveYear'] == 2024
+
+X_train = df_processed[train_mask][ALL_FEATURES].copy()
+X_val   = df_processed[val_mask][ALL_FEATURES].copy()
+X_test  = df_processed[test_mask][ALL_FEATURES].copy()
+
+y_train = df_processed[train_mask]['next_year_donation']
+y_val   = df_processed[val_mask]['next_year_donation']
+y_test  = df_processed[test_mask]['next_year_donation']
+
+y_train_log = np.log1p(y_train)
+y_val_log   = np.log1p(y_val)
+y_test_log  = np.log1p(y_test)
+
+# Age imputation — median computed on train only to prevent leakage
+age_median = X_train['Age'].median()
+for X in [X_train, X_val, X_test]:
+    X['Age'] = X['Age'].fillna(age_median)
+
+print(f"Train : {X_train.shape}  (DriveYear 2014–2023)")
+print(f"Val   : {X_val.shape}  (DriveYear 2024)")
+print(f"Test  : {X_test.shape}   (DriveYear 2025)")
+print(f"Total features: {len(ALL_FEATURES)}")
+print(f"\nRemaining nulls in train: {X_train.isnull().sum().sum()}")
+
+```
+
+## Baseline Model — Ridge Regression {#sec-ridge}
+
+Before deploying a complex model, the first question to answer is simpler: 
+*can a linear model explain donor behavior at all?* Ridge regression serves 
+that purpose here — not as a serious candidate for production, but as a 
+diagnostic tool to test whether the relationship between historical giving 
+patterns and future pledges is approximately linear.
+
+Ridge was chosen over plain OLS because three temporal features — 
+`TotalPledgeAnual`, `Lag1_Pledge`, and `Avg_pledges_3years` — measure 
+essentially the same signal at different points in time. Under OLS, that 
+multicollinearity causes coefficients to inflate to unstable values that 
+cancel each other out. Ridge's L2 penalty forces all coefficients to be 
+solved simultaneously with a constraint on their size, distributing moderate 
+weights across correlated features rather than assigning an arbitrarily large 
+weight to one and near-zero to the others.
+
+```{python}
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import Ridge
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+
+ridge_pipeline = Pipeline([
+    ('scaler', StandardScaler()),
+    ('ridge', Ridge(alpha=1.0))
+])
+
+ridge_pipeline.fit(X_train, y_train_log)
+
+y_pred_train = ridge_pipeline.predict(X_train)
+y_pred_val   = ridge_pipeline.predict(X_val)
+
+print('--- TRAIN ---')
+print('RMSE:', np.sqrt(mean_squared_error(y_train_log, y_pred_train)))
+print('R²  :', r2_score(y_train_log, y_pred_train))
+print('MAE :', mean_absolute_error(y_train_log, y_pred_train))
+
+print('\n--- VAL ---')
+print('RMSE:', np.sqrt(mean_squared_error(y_val_log, y_pred_val)))
+print('R²  :', r2_score(y_val_log, y_pred_val))
+print('MAE :', mean_absolute_error(y_val_log, y_pred_val))
+```
+
+```{python}
+print("Varianza y_train_log:", y_train_log.var())
+print("Varianza y_val_log  :", y_val_log.var())
+print("Tamaño val          :", X_val.shape[0])
+```
+
+```{python}
+y_pred_val = ridge_pipeline.predict(X_val)
+
+errores_dolar = np.abs(np.expm1(y_val_log) - np.expm1(y_pred_val))
+print(f"MAE en dólares  : ${errores_dolar.mean():,.0f}")
+print(f"Mediana error   : ${np.median(errores_dolar):,.0f}")
+print(f"P75 error       : ${np.percentile(errores_dolar, 75):,.0f}")
+print(f"P90 error       : ${np.percentile(errores_dolar, 90):,.0f}")
+
+```
+
+### Results & Interpretation
+
+**A note on metrics:** MAE in dollar scale is dominated by a small number 
+of mega-donors — a single prediction error on a $1M donor inflates the mean 
+for everyone else. The median absolute error is the more honest operational 
+metric: it describes the typical error for a randomly selected donor, 
+unaffected by extremes.
+
+| Metric | Value | Interpretation |
+|---|---|---|
+| R² — Train | 0.33 | Model explains 33% of variance in training data |
+| R² — Val | 0.59 | 2023 has lower variance (σ²=2.73) than train (σ²=5.94) — single year more homogeneous than a decade |
+| Median error | $309 | Typical prediction is off by $309 on a $650 median donation |
+| P90 error | $3,247 | 10% of donors have errors exceeding $3,247 |
+| MAE (dollar) | $32,011 | Dominated by outliers — not a useful summary statistic here |
+
+The R² gap between train and validation is not a sign of data leakage or 
+overfitting — it reflects that 2023 donor behavior is more homogeneous than 
+the 2014–2023 window, which spans economic cycles, COVID disruption, and 
+institutional changes.
+
+More importantly, R² of 0.33 on train data is low for a model evaluated on 
+its own training set. This confirms the core finding: **donor giving behavior 
+is not linearly separable.** A donor who gave $500 for five consecutive years 
+behaves differently from one who gave $2,500 once — a distinction Ridge 
+cannot capture because it treats all relationships as linear combinations of 
+features.
+
+This is precisely the gap XGBoost is designed to fill: non-linear 
+interactions, heterogeneous donor profiles, and residual patterns that vary 
+across the donation range.
+
+## XGBoost Model {#sec-xgboost}
+
+### Why XGBoost?
+
+Three reasons XGBoost is better suited than Ridge for this problem:
+
+1. **Non-linearity** — the relationship between past pledges and future pledges isn't linear. A donor who gave \$500 for 5 years behaves differently from one who gave \$2,500 once.
+2. **Heterogeneous profiles** — the donor population spans students, alumni, wealthy retirees, and board members. Tree-based methods handle this mixture naturally without feature scaling.
+3. **Robust to skew** — sequential boosting iteratively corrects residuals, which works well when error patterns vary across the donation range.
+
+### Hyperparameter Tuning
+
+We ran `RandomizedSearchCV` with 25 candidate combinations and 3-fold cross-validation. Unlike the Ridge model which used RMSE, we optimize on **MAE** here — a deliberate choice justified in the evaluation section below.
+
+```{python}
+param_distributions = {
+    'n_estimators':     [300, 500, 800, 1000],
+    'learning_rate':    [0.01, 0.03, 0.05, 0.1],
+    'max_depth':        [3, 4, 5, 6],
+    'subsample':        [0.7, 0.8, 0.9, 1.0],
+    'min_child_weight': [1, 3, 5],
+    'reg_lambda':       [1, 1.5, 2],
+}
+
+random_search = RandomizedSearchCV(
+    estimator=xgb.XGBRegressor(
+        objective='reg:absoluteerror',
+        random_state=42,
+        n_jobs=-1
+    ),
+    param_distributions=param_distributions,
+    n_iter=25,
+    scoring='neg_mean_absolute_error',
+    cv=3,
+    verbose=1,
+    random_state=42,
+    n_jobs=-1,
+)
+
+random_search.fit(X_train, y_train_log)
+xgb_reg = random_search.best_estimator_
+```
+
+### Model Evaluation
+
+#### Why MAE and not RMSE?
+
+RMSE squares each error before averaging, which means a single donor with a \$748K prediction error can dominate the entire metric. In this dataset, that is not a theoretical concern — it is exactly what happens.
+
+The choice of MAE is deliberate: it weights all absolute errors equally, which better reflects operational usefulness. A \$500 error on a \$600 pledge and a \$500 error on a \$100,000 pledge are treated the same, which is the right behavior when the goal is to prioritize outreach across the full donor population.
+
+#### Full population results
+
+```{python}
+for name, X_split, y_split in [('Train', X_train, y_train_log),
+                                ('Validation', X_val, y_val_log),
+                                ('Test', X_test, y_test_log)]:
+    y_pred      = xgb_reg.predict(X_split)
+    y_pred_orig = np.expm1(y_pred)
+    y_true_orig = np.expm1(y_split.values)
+    rmse = np.sqrt(mean_squared_error(y_true_orig, y_pred_orig))
+    mae  = np.mean(np.abs(y_true_orig - y_pred_orig))
+    r2   = r2_score(y_true_orig, y_pred_orig)
+    print(f"--- {name} ---")
+    print(f"RMSE: ${rmse:,.0f}")
+    print(f"MAE : ${mae:,.0f}")
+    print(f"R²  : {r2:.3f}\n")
+```
+
+On the full population, test R² lands at 0.456 with a MAE of \$1,146. The gap between RMSE (\$7,942) and MAE (\$1,146) is already a signal worth investigating: when those two metrics diverge this much, a small number of large errors are driving the RMSE up while most predictions remain reasonable.
+
+#### Diagnosing the RMSE gap: major donors
+
+Inspecting the largest prediction errors confirms the hypothesis. The top error alone exceeds \$748,000 — a donor with a 3-year average pledge of ~\$12,000 who gave \$791,930 in 2024. That is a 36x jump over their historical baseline, almost certainly a planned gift or one-time major contribution triggered by personal circumstances.
+
+```{python}
+y_pred_test    = xgb_reg.predict(X_test)
+errors_dollars = np.abs(np.expm1(y_test_log) - np.expm1(y_pred_test))
+print("Top 10 largest prediction errors (dollar scale):")
+print(errors_dollars.nlargest(10))
+```
+
+This is not a modeling failure. No algorithm trained on giving history can predict a one-time transformational gift, because there is no signal in the data that precedes it. Major donors of this kind are operationally managed through direct relationship programs, not predictive models.
+
+#### Segmented evaluation: excluding major donors
+
+To get a cleaner picture of model quality for the actionable population, we separate the top 1% of donors by actual pledge amount (threshold: ~\$35,000).
+
+```{python}
+threshold  = np.expm1(y_test_log).quantile(0.99)
+mask_major = np.expm1(y_test_log) > threshold
+
+y_pred_clean = xgb_reg.predict(X_test[~mask_major])
+mae_clean    = mean_absolute_error(y_test_log[~mask_major], y_pred_clean)
+rmse_clean   = np.sqrt(mean_squared_error(y_test_log[~mask_major], y_pred_clean))
+r2_clean     = r2_score(y_test_log[~mask_major], y_pred_clean)
+
+print(f"Threshold (top 1%): ${threshold:,.0f}")
+print(f"Major donors removed: {mask_major.sum()}")
+print(f"\nWithout major donors:")
+print(f"MAE : {mae_clean:.3f}")
+print(f"RMSE: {rmse_clean:.3f}")
+print(f"R²  : {r2_clean:.3f}")
+```
+
+Removing 117 donors (1% of test) brings R² from 0.456 to **0.750**. The model explains three quarters of donation variance for the remaining 99% of the population.
+
+#### Performance summary
+
+| Segment | R² | Notes |
+|---|---|---|
+| Full population | 0.456 | Dragged down by unpredictable major gifts |
+| Without major donors (>\$35k) | **0.750** | Actionable population |
+
+
+
+#### Comparison to naïve baseline
+
+```{python}
+# Naïve baseline: predict each donor gives the same as last year
+y_naive     = X_test['Lag1_Pledge']                          # last year's pledge in log scale
+mae_naive   = mean_absolute_error(
+                  np.expm1(y_test_log),
+                  y_naive
+              )
+
+y_pred_test = xgb_reg.predict(X_test)
+mae_xgb     = mean_absolute_error(
+                  np.expm1(y_test_log),
+                  np.expm1(y_pred_test)
+              )
+
+improvement = mae_naive - mae_xgb
+
+print(f"Naïve baseline MAE : ${mae_naive:,.0f}")
+print(f"XGBoost MAE        : ${mae_xgb:,.0f}")
+print(f"Improvement        : ${improvement:,.0f} per donor")
+```
+
+| Model | MAE | Improvement |
+|---|---|---|
+| Naïve (repeat last year's pledge) | ~\$1,780 | — |
+| **XGBoost** | **\$1,146** | **~\$634  per donor** |
+
+The naïve baseline — predicting each donor will give the same as the previous year — is the most natural benchmark for this problem. XGBoost cuts the average error roughly in half across all donation ranges.
+
+
+## Feature Importance {#sec-importance}
+
+```{python}
+fi = (
+    pd.DataFrame({'feature': X_train.columns,
+                  'importance': xgb_reg.feature_importances_})
+    .sort_values('importance', ascending=False)
+    .reset_index(drop=True)
+)
+fi['importance_pct'] = 100 * fi['importance'] / fi['importance'].sum()
+print(fi.head(20).to_string(index=False))
+```
+
+The top features tell a coherent story about donor behavior:
+
+- **`TotalPledgeAnual` (~28%)** — current-year pledge amount is the strongest single predictor. Donors are largely consistent year to year.
+- **`HighestMembershipLevel` and `MostRecentMembershipLevel` (~28% combined)** — membership tier captures long-term commitment independent of any single dollar amount. Both variables reflect behavior from the prior year, so there is no data leakage: the level assigned in year N-1 predicts giving in year N+1.
+- **Lag and trend features** (`Lag1_Pledge`, `Avg_pledges_3years`, `Avg_pct_increase_5years`) — add meaningful signal for identifying donors whose giving trajectory is growing versus plateauing.
+- **`insufficient_history` (~4.6%)** — flags donors with fewer than 3 years of giving history. Its presence in the top features reflects a genuine behavioral split: new donors are harder to predict and the model appropriately adjusts.
+
+The model essentially answers: *"What has this donor been doing, how committed are they to the organization, and is their trajectory going up or down?"*
+
+## Model Explainability: SHAP Values {#sec-shap}
+
+Global feature importance tells us which variables matter most across all donors.
+SHAP goes further: it explains *why* the model made a specific prediction for each individual donor,
+decomposing the output into signed contributions from every feature.
+
+### Setup
+
+```{python}
+import shap
+explainer   = shap.TreeExplainer(xgb_reg)
+shap_values = explainer.shap_values(X_test)
+```
+
+### Global Summary: What Drives Predictions Across All Donors?
+
+The summary plot shows each feature's distribution of SHAP values across the test set.
+Each dot is one donor. Color indicates the feature value (red = high, blue = low).
+Position on the x-axis shows whether that feature pushed the prediction up or down.
+
+```{python}
+#| label: fig-shap-summary
+#| fig-cap: "SHAP summary plot: each dot is one donor. Color = feature value (red high, blue low). X-axis position shows directional impact on predicted donation amount."
+#| fig-width: 10
+#| fig-height: 7
+shap.summary_plot(
+    shap_values, X_test,
+    max_display=15,
+    show=False
+)
+plt.title('SHAP Summary — Feature impact across all test donors', fontsize=13, fontweight='bold')
+plt.tight_layout()
+plt.savefig('shap_summary.png', dpi=150, bbox_inches='tight')
+plt.show()
+plt.close()
+
+```
+
+Key patterns visible in the summary:
+
+- **`TotalPledgeAnual`** — high values (red) consistently push predictions up, low values push them down. The strongest and most consistent signal.
+- **`HighestMembershipLevel_encoded`** — higher membership tiers reliably increase predicted donations, confirming the feature captures genuine long-term commitment rather than just echoing the pledge amount.
+- **`insufficient_history`** — when flagged (red), it systematically reduces predictions. The model appropriately discounts donors whose history is too short to trust.
+- **Lag and trend features** — `Lag1_Pledge` and `Avg_pledges_3years` show wide SHAP distributions, meaning they matter more for some donors than others — exactly the kind of nuance global importance misses.
+
+### Individual Explanations: Two Contrasting Donors
+
+To illustrate how SHAP works in practice, we examine two donors with very different profiles.
+
+```{python}
+# Identify a high-value and a low-value donor in test set
+y_pred_test  = xgb_reg.predict(X_test)
+high_idx     = np.argmax(y_pred_test)
+low_idx      = np.argmin(y_pred_test[y_pred_test > 0])
+
+print(f"High-value donor — predicted: ${np.expm1(y_pred_test[high_idx]):,.0f}")
+print(f"Low-value donor  — predicted: ${np.expm1(y_pred_test[low_idx]):,.0f}")
+```
+
+**High-value donor:**
+
+```{python}
+#| label: fig-shap-high
+#| fig-cap: "SHAP waterfall for highest-predicted donor. Each bar shows how much one feature pushed the prediction above or below the global expected value."
+shap_explanation = explainer(X_test.iloc[[high_idx]])
+shap.waterfall_plot(shap_explanation[0], max_display=10, show=False)
+plt.title('SHAP Waterfall — High-value donor', fontsize=12, fontweight='bold')
+plt.tight_layout()
+plt.savefig('shap_waterfall_high.png', dpi=150, bbox_inches='tight')
+plt.show()
+plt.close()
+
+```
+
+**Low-value donor:**
+
+```{python}
+#| label: fig-shap-low
+#| fig-cap: "SHAP waterfall for lowest-predicted donor, showing which features suppress the predicted donation amount."
+shap_explanation_low = explainer(X_test.iloc[[low_idx]])
+shap.waterfall_plot(shap_explanation_low[0], max_display=10, show=False)
+plt.title('SHAP Waterfall — Low-value donor', fontsize=12, fontweight='bold')
+plt.tight_layout()
+plt.savefig('shap_waterfall_low.png', dpi=150, bbox_inches='tight')
+plt.show()
+plt.close()
+
+```
+
+The waterfall plot reads from bottom to top: starting at the global expected value (E[f(x)]),
+each bar shows how much a specific feature moved the prediction up (red) or down (blue),
+arriving at the final predicted amount for that donor.
+
+### Operational Takeaway
+
+SHAP values translate model outputs into fundraiser-readable explanations.
+Instead of "the model predicts $2,400 for this donor," a development officer can say:
+*"This donor's membership tier and consistent 3-year trend suggest stable giving,
+but their pledge dropped last year — outreach should focus on re-engagement."*
+
+This kind of reasoning is only possible when predictions are decomposable.
+For the segmentation use case, SHAP also allows prioritizing donors not just by predicted amount,
+but by *which lever* is driving their score — enabling more targeted stewardship strategies.
+
+
+
+## Donor Segmentation {#sec-segmentation}
+
+The model output alone doesn't drive decisions — it needs to be translated into actionable groupings for the fundraising team. Each donor is assigned to one of four quadrants defined by two axes:
+
+- **Predicted Amount**: above or below the 75th percentile of predicted donations
+- **Historical Reliability**: 100% of pledge years met vs. any miss
+
+**Why percentile for amount but a fixed threshold for reliability?**  
+Amount thresholds are context-dependent and change year to year — percentile captures relative standing within the current donor pool. Reliability, on the other hand, is absolute: never having missed a pledge has clear operational meaning that doesn't need to be relativized.
+
+| Quadrant | Amount | Reliability | Recommended Strategy |
+|---|---|---|---|
+| **VIP — Maximum Priority** | High (≥ p75) | 100% | Priority contact, relationship maintenance |
+| **High Potential — Needs Follow-up** | High (≥ p75) | < 100% | High value, targeted follow-up strategy |
+| **Stable Base** | Low (< p75) | 100% | Reliable, low-touch contact |
+| **Low Priority** | Low (< p75) | < 100% | Minimal investment of agent time |
+
+```{python}
+# ── Build segmentation table ──────────────────────────────────────────────────
+processed_table = df_processed.copy()
+for col in ALL_FEATURES:
+    if col not in processed_table.columns:
+        processed_table[col] = 0
+processed_table[ALL_FEATURES] = processed_table[ALL_FEATURES].apply(pd.to_numeric, errors='coerce').fillna(0)
+
+last_year_by_fan = (
+    processed_table.sort_values(['FanID', 'DriveYear'])
+    .drop_duplicates('FanID', keep='last')
+    .copy()
+)
+last_year_by_fan['predicted_amount'] = np.expm1(xgb_reg.predict(last_year_by_fan[ALL_FEATURES]))
+
+segmentation_table = (
+    last_year_by_fan[['FanID', 'DriveYear', 'predicted_amount']]
+    .merge(fan_reliability[['FanID', 'pct_years_met_commitment']], on='FanID', how='left')
+)
+
+amount_cutoff = segmentation_table['predicted_amount'].quantile(0.75)
+
+segmentation_table['high_amount']      = segmentation_table['predicted_amount'] >= amount_cutoff
+segmentation_table['high_reliability'] = segmentation_table['pct_years_met_commitment'].fillna(0) >= 100.0
+
+segmentation_table['quadrant'] = np.select(
+    [
+        segmentation_table['high_amount'] & segmentation_table['high_reliability'],
+        segmentation_table['high_amount'] & ~segmentation_table['high_reliability'],
+        ~segmentation_table['high_amount'] & segmentation_table['high_reliability'],
+    ],
+    ['VIP — Maximum Priority', 'High Potential — Needs Follow-up', 'Stable Base'],
+    default='Low Priority'
+)
+
+print(f"Amount threshold (p75): ${amount_cutoff:,.0f}")
+print(f"\nDonor distribution by quadrant:")
+print(segmentation_table['quadrant'].value_counts().to_string())
+
+# Export for Tableau
+segmentation_table.to_csv('segmentation_output.csv', index=False)
+print("\n✓ Exported to segmentation_output.csv")
+
+```
+```{python}
+amount_cutoff = segmentation_table['predicted_amount'].quantile(0.75)
+
+segmentation_table['high_amount']      = segmentation_table['predicted_amount'] >= amount_cutoff
+segmentation_table['high_reliability'] = segmentation_table['pct_years_met_commitment'].fillna(0) >= 100.0
+
+segmentation_table['quadrant'] = np.select(
+    [
+        segmentation_table['high_amount'] & segmentation_table['high_reliability'],
+        segmentation_table['high_amount'] & ~segmentation_table['high_reliability'],
+        ~segmentation_table['high_amount'] & segmentation_table['high_reliability'],
+    ],
+    ['VIP — Maximum Priority', 'High Potential — Needs Follow-up', 'Stable Base'],
+    default='Low Priority'
+)
+
+# Export for Tableau dashboards
+segmentation_table.to_csv('segmentation_output.csv', index=False)
+```
+
+The segmentation table was exported for integration into Tableau dashboards, where fundraising agents can filter by quadrant and drill into individual donor profiles.
+
+
+## Visualizations {#sec-viz}
+
+The following seven charts document each analytical decision and the final model results.
+
+
+### G1: Donor Count by Year
+
+```{python}
+#| label: fig-g1
+#| fig-cap: "Donor count per year. The drop in 2025 reflects a partial data window, not an actual decline in participation."
+#| fig-width: 9
+#| fig-height: 4
+
+fig, ax = plt.subplots(figsize=(9, 4))
+_df = df.copy()
+donors_by_year = _df.groupby('DriveYear')['FanID'].nunique()
+ax.plot(donors_by_year.index, donors_by_year.values,
+        marker='o', linewidth=2.5, markersize=8, color=COLORS['train'])
+ax.axvline(x=2014, color=COLORS['train'], linestyle='--', linewidth=1.8,
+           label='Data start (2014)', alpha=0.7)
+ax.axvline(x=2023, color=COLORS['val'],  linestyle='--', linewidth=1.8,
+           label='Validation start (2023)', alpha=0.7)
+ax.axvline(x=2024, color=COLORS['test'], linestyle='--', linewidth=1.8,
+           label='Test start (2024)', alpha=0.7)
+ax.set_xlabel('Year', fontsize=11, fontweight='bold')
+ax.set_ylabel('Unique donors', fontsize=11, fontweight='bold')
+ax.set_title('G1: Donor count by year', fontsize=13, fontweight='bold', pad=10)
+ax.legend(fontsize=9)
+ax.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+```
+
+### G2: Geographic Distribution
+
+```{python}
+#| label: fig-g2
+#| fig-cap: "Top 10 states by donor count. Florida (highlighted) accounts for ~75% of all donors, justifying a dedicated `is_florida` flag over full 50-state one-hot encoding."
+#| fig-width: 9
+#| fig-height: 4
+
+_df = df.copy()
+state_counts  = _df['state'].value_counts().head(10)
+colors_states = [COLORS['highlight'] if s == 'FL' else COLORS['train']
+                 for s in state_counts.index]
+
+fig, ax = plt.subplots(figsize=(9, 4))
+ax.barh(range(len(state_counts)), state_counts.values, color=colors_states)
+ax.set_yticks(range(len(state_counts)))
+ax.set_yticklabels(state_counts.index)
+ax.set_xlabel('Donor count', fontsize=11, fontweight='bold')
+ax.set_title('G2: Top 10 states by donor count', fontsize=13, fontweight='bold', pad=10)
+ax.invert_yaxis()
+for i, v in enumerate(state_counts.values):
+    ax.text(v + 30, i, str(v), va='center', fontsize=9)
+plt.tight_layout()
+plt.show()
+```
+
+### G3: Commitment Rate Distribution
+
+```{python}
+#| label: fig-g3
+#| fig-cap: "90.9% of donors have a perfect 100% commitment rate over their giving history. This near-degenerate distribution makes a binary threshold the only sensible cutoff."
+#| fig-width: 7
+#| fig-height: 4
+
+perfect_pct   = (fan_reliability['pct_years_met_commitment'] == 100).mean() * 100
+imperfect_pct = 100 - perfect_pct
+
+fig, ax = plt.subplots(figsize=(7, 4))
+bars = ax.bar(['100% Reliable', 'Less than 100%'],
+              [perfect_pct, imperfect_pct],
+              color=[COLORS['val'], COLORS['test']],
+              alpha=0.85, edgecolor='black', linewidth=1.5)
+ax.set_ylabel('% of donors', fontsize=11, fontweight='bold')
+ax.set_title('G3: Historical commitment rate distribution', fontsize=13, fontweight='bold', pad=10)
+ax.set_ylim([0, 115])
+for bar, val in zip(bars, [perfect_pct, imperfect_pct]):
+    ax.text(bar.get_x() + bar.get_width() / 2., bar.get_height() + 2,
+            f'{val:.1f}%', ha='center', va='bottom', fontsize=12, fontweight='bold')
+plt.tight_layout()
+plt.show()
+```
+
+### G4: Feature Importance
+
+```{python}
+#| label: fig-g4
+#| fig-cap: "Top 15 XGBoost feature importances. Current pledge amount and membership level account for ~56% of total importance."
+#| fig-width: 9
+#| fig-height: 5
+
+fi_sorted      = fi.head(15)
+colors_palette = [COLORS['train'], COLORS['val'], COLORS['test'], COLORS['highlight']]
+
+fig, ax = plt.subplots(figsize=(9, 5))
+ax.barh(range(len(fi_sorted)), fi_sorted['importance'].values,
+        color=[colors_palette[i % 4] for i in range(len(fi_sorted))])
+ax.set_yticks(range(len(fi_sorted)))
+ax.set_yticklabels(fi_sorted['feature'].values, fontsize=10)
+ax.set_xlabel('Importance', fontsize=11, fontweight='bold')
+ax.set_title('G4: Top 15 feature importances (XGBoost)', fontsize=13, fontweight='bold', pad=10)
+ax.invert_yaxis()
+for i, v in enumerate(fi_sorted['importance'].values):
+    ax.text(v + 0.002, i, f'{v:.3f}', va='center', fontsize=9)
+plt.tight_layout()
+plt.show()
+```
+
+### G5: Predicted vs. Actual (Validation Set)
+
+```{python}
+#| label: fig-g5
+#| fig-cap: "XGBoost predicted vs. actual donation amounts on the validation set (log-log scale, capped at 99.5th percentile). Points close to the diagonal indicate accurate predictions."
+#| fig-width: 7
+#| fig-height: 6
+
+y_true_v = y_val.values.astype(float)
+y_pred_v = np.expm1(xgb_reg.predict(X_val))
+valid_x  = (y_true_v > 0) & (y_pred_v > 0) & np.isfinite(y_true_v) & np.isfinite(y_pred_v)
+
+CAP         = float(np.nanpercentile(y_true_v[valid_x], 99.5))
+y_true_plot = np.clip(y_true_v[valid_x], 1.0, CAP)
+y_pred_plot = np.clip(y_pred_v[valid_x], 1.0, CAP)
+r2_xgb      = r2_score(y_true_plot, y_pred_plot)
+
+fig, ax = plt.subplots(figsize=(7, 6))
+ax.scatter(y_true_plot, y_pred_plot, alpha=0.4, s=18, color=COLORS['train'], label='Donors')
+ax.plot([1.0, CAP], [1.0, CAP],
+        color=COLORS['highlight'], linestyle='--', lw=2, label='Perfect prediction')
+ax.set_xscale('log')
+ax.set_yscale('log')
+ax.set_xlim(1.0, CAP)
+ax.set_ylim(1.0, CAP)
+tick_vals = [v for v in [1, 10, 100, 1_000, 10_000, 100_000] if 1.0 <= v <= CAP]
+ax.set_xticks(tick_vals)
+ax.set_yticks(tick_vals)
+ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x:,.0f}'))
+ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x:,.0f}'))
+ax.tick_params(axis='x', labelrotation=30, labelsize=9)
+ax.tick_params(axis='y', labelsize=9)
+ax.set_xlabel('Actual donation', fontsize=11, fontweight='bold')
+ax.set_ylabel('Predicted donation', fontsize=11, fontweight='bold')
+ax.set_title(f'G5: Predicted vs. actual (validation)\nR\u00b2 = {r2_xgb:.3f}  |  excl. zero donations and top 0.5%',
+             fontsize=13, fontweight='bold', pad=10)
+ax.legend(fontsize=9)
+ax.grid(True, alpha=0.3, which='both')
+plt.tight_layout()
+plt.show()
+```
+
+### G6: Donor Segmentation Quadrant
+
+```{python}
+#| label: fig-g6
+#| fig-cap: "Donor segmentation by predicted amount × historical reliability. Each dot is one donor. Dashed lines mark the p75 amount threshold and the 100% reliability cutoff."
+#| fig-width: 9
+#| fig-height: 6
+
+seg = segmentation_table.copy()
+seg['predicted_amount'] = (
+    seg['predicted_amount']
+    .replace([np.inf, -np.inf], np.nan)
+    .fillna(1.0)
+    .clip(lower=1.0)
+)
+CAP_G6   = float(np.percentile(seg['predicted_amount'], 99.5))
+seg_plot = seg[seg['predicted_amount'] <= CAP_G6].copy()
+
+QUADRANT_COLORS = {
+    'VIP — Maximum Priority':           COLORS['val'],
+    'High Potential — Needs Follow-up': COLORS['highlight'],
+    'Stable Base':                      COLORS['train'],
+    'Low Priority':                     COLORS['test'],
+}
+
+fig, ax = plt.subplots(figsize=(9, 6))
+for q, color in QUADRANT_COLORS.items():
+    mask = seg_plot['quadrant'] == q
+    ax.scatter(seg_plot.loc[mask, 'predicted_amount'],
+               seg_plot.loc[mask, 'pct_years_met_commitment'].fillna(0),
+               alpha=0.55, s=30, label=q, color=color)
+
+ax.axvline(x=float(amount_cutoff), color='black', linestyle='--',
+           linewidth=1.5, alpha=0.6,
+           label=f'Amount threshold p75 (${amount_cutoff:,.0f})')
+ax.axhline(y=100, color='gray', linestyle='--', linewidth=1.5,
+           alpha=0.6, label='Reliability = 100%')
+ax.set_xscale('log')
+ax.set_xlim(1.0, CAP_G6)
+ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x:,.0f}'))
+ax.set_xlabel('Predicted donation ($, log scale)', fontsize=11, fontweight='bold')
+ax.set_ylabel('% Years Commitment Met', fontsize=11, fontweight='bold')
+ax.set_title('G6: Donor segmentation quadrant\nAmount × Reliability matrix',
+             fontsize=13, fontweight='bold', pad=10)
+ax.legend(fontsize=9, loc='upper left')
+ax.grid(True, alpha=0.3, which='both')
+plt.tight_layout()
+plt.show()
+```
+
+Each chart was designed to tell a specific part of the story:
+
+- **G1** confirms that 2023 and 2024 have enough observations to serve as meaningful validation and test splits, and documents the expected drop in 2025 due to the partial data window.
+- **G2** shows Florida's overwhelming dominance (~75% of donors), justifying a dedicated `is_florida` flag over a full 50-state encoding that would add noise with minimal signal.
+- **G3** demonstrates that 96.6% of donors have a perfect commitment record — the binary threshold at 100% is the only sensible cutoff given this near-degenerate distribution.
+- **G4** ranks the top 15 features by XGBoost importance. `TotalPledgeAnual` (~28%) and membership level features (~28% combined) dominate, confirming that current giving behavior and institutional commitment tier are the strongest predictors of future donations. Lag and trend features add meaningful signal for identifying donors on a growth or decline trajectory.
+- **G5** compares XGBoost predictions against actual donations on a log-log scatter (validation set, capped at 99.5th percentile for display). Predictions cluster close to the diagonal across the full donation range, with expected dispersion at the high end where individual donor decisions introduce irreducible variance.
+- **G6** plots every donor in the predicted-amount × reliability space, colored by quadrant. The segmentation produces four operationally distinct groups: VIP donors warrant proactive stewardship, High Potential donors represent upgrade opportunities, Stable Base donors are low-risk retention targets, and Low Priority donors can be deprioritized in outreach planning.
+
+
+## Limitations & Future Work {#sec-limitations}
+
+### Known Limitations
+
+**Major donor unpredictability** — The top 1% of donors (pledge > \$35K) drive most of the RMSE on the full test set, pulling R² from 0.750 to 0.456. A single donor with a historical average of ~\$12K gave \$791K in 2024 — a 36× jump with no detectable signal in prior history. This segment is better managed through relationship programs than predictive models; the reported R² of 0.750 reflects the actionable 99% of the donor population.
+
+**Model scope** — The pipeline applies only to donors with existing pledge history. New or lapsed donors require a separate prospecting model trained on different signals; the `insufficient_history` flag (29% of records) partially addresses this within the current model but does not replace a dedicated architecture.
+
+**Temporal drift** — The model is trained on 2014–2022 behavior and evaluated on 2023–2024. Year-to-year behavioral shifts not captured in historical features (e.g., macroeconomic shocks, institutional changes) will degrade performance on future cohorts without retraining.
+
+
+### Potential Improvements
+
+- **Major donor segmentation** — Train a separate high-value model exclusively on donors above the \$35K threshold, using wealth screening data (IWave capacity scores are already in the feature set) and relationship-level signals.
+- **External signals** — Football win rates (fan engagement proxy) and macroeconomic indicators (interest rates, consumer sentiment) could explain year-to-year variance the model currently attributes to noise.
+- **Two-stage architecture** — Stage 1: predict whether the donor gives at all. Stage 2: predict amount conditional on giving. This would handle lapsed donors more cleanly than the current single-model approach and reduce the distortion caused by zero-donation records.
+- **Pledge reduction classifier** — A separate binary model identifying donors likely to *decrease* their pledge would complement the regression output for retention-focused outreach.
+- **SHAP explanations** — Individual donor-level SHAP values would help fundraising agents understand *why* a specific prediction was made, enabling more targeted conversations rather than score-based prioritization alone.

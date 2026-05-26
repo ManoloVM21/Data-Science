@@ -194,7 +194,7 @@ GROUP BY state
 ORDER BY cnt DESC;
 
 SELECT * FROM donations_df
-INTO OUTFILE 'C:/ProgramData/MySQL/MySQL Server 8.0/Uploads/modeling_table.csv'
+INTO OUTFILE 'modeling_table.csv'
 FIELDS TERMINATED BY ','
 ENCLOSED BY '"'
 LINES TERMINATED BY '\n';

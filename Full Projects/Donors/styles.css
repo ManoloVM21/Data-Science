@@ -1,0 +1,191 @@
+/* ── Typography ─────────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,wght@0,300;0,400;0,600;1,400&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+body {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 16px;
+  line-height: 1.75;
+  color: #1e1e2e;
+}
+
+/* ── Headings ───────────────────────────────────────────────────────────── */
+h1, h2, h3, h4 {
+  font-family: 'Source Serif 4', Georgia, serif;
+  font-weight: 600;
+  color: #0f172a;
+  letter-spacing: -0.01em;
+}
+
+h1.title {
+  font-size: 2.4rem;
+  font-weight: 300;
+  border-bottom: 3px solid #2563eb;
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.25rem;
+  color: #0f172a;
+}
+
+.subtitle {
+  font-size: 1.15rem;
+  color: #475569;
+  font-weight: 400;
+  margin-top: 0;
+}
+
+p.author, p.date {
+  font-size: 0.9rem;
+  color: #64748b;
+  margin: 0.15rem 0;
+}
+
+h2 {
+  font-size: 1.6rem;
+  margin-top: 2.5rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid #e2e8f0;
+  color: #1e3a5f;
+}
+
+h3 {
+  font-size: 1.2rem;
+  margin-top: 1.75rem;
+  color: #1e3a5f;
+}
+
+h4 {
+  font-size: 1rem;
+  color: #334155;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.85rem;
+}
+
+/* ── Table of contents ──────────────────────────────────────────────────── */
+#TOC {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.82rem;
+  border-right: 1px solid #e2e8f0;
+  padding-right: 1.25rem;
+}
+
+#TOC a {
+  color: #475569;
+  text-decoration: none;
+}
+
+#TOC a:hover {
+  color: #2563eb;
+}
+
+#TOC .active {
+  color: #2563eb;
+  font-weight: 600;
+}
+
+/* ── Tables ─────────────────────────────────────────────────────────────── */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9rem;
+  margin: 1.5rem 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+thead tr {
+  background-color: #1e3a5f;
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+thead th {
+  padding: 0.75rem 1rem;
+  text-align: left;
+}
+
+tbody tr:nth-child(even) {
+  background-color: #f8fafc;
+}
+
+tbody tr:hover {
+  background-color: #eff6ff;
+}
+
+tbody td {
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid #e2e8f0;
+  color: #334155;
+}
+
+/* ── Code blocks ─────────────────────────────────────────────────────────── */
+pre, code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.83rem;
+}
+
+pre.sourceCode {
+  border-left: 3px solid #2563eb;
+  border-radius: 0 6px 6px 0;
+  background-color: #f8fafc !important;
+}
+
+/* ── Callout / blockquote ────────────────────────────────────────────────── */
+blockquote {
+  border-left: 4px solid #2563eb;
+  background: #eff6ff;
+  padding: 0.75rem 1.25rem;
+  margin: 1.5rem 0;
+  border-radius: 0 6px 6px 0;
+  color: #1e3a5f;
+  font-style: italic;
+}
+
+/* ── Figures ─────────────────────────────────────────────────────────────── */
+.quarto-figure {
+  margin: 2rem 0;
+}
+
+figcaption {
+  font-size: 0.82rem;
+  color: #64748b;
+  text-align: center;
+  margin-top: 0.5rem;
+  font-style: italic;
+}
+
+/* ── Inline code ─────────────────────────────────────────────────────────── */
+code:not(pre code) {
+  background-color: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  font-size: 0.85em;
+  color: #be185d;
+}
+
+/* ── Section dividers ────────────────────────────────────────────────────── */
+hr {
+  border: none;
+  border-top: 1px solid #e2e8f0;
+  margin: 2rem 0;
+}
+
+/* ── Bold ────────────────────────────────────────────────────────────────── */
+strong {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+/* ── Links ───────────────────────────────────────────────────────────────── */
+a {
+  color: #2563eb;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
